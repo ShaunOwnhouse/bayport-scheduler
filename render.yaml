@@ -1,0 +1,15 @@
+# =========================================================
+# Render Deployment Blueprint — Bayport Scheduler
+# =========================================================
+services:
+  - type: worker
+    name: bayport-scheduler
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node scheduler.js
+    envVars:
+      - key: PAYEE_API
+        sync: false
+      - key: CALLLIST_API
+        sync: false
