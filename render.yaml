@@ -1,8 +1,8 @@
 # =========================================================
-# Render Deployment Blueprint — Bayport Scheduler
+# Render Deployment Blueprint — Web Service Version
 # =========================================================
 services:
-  - type: worker
+  - type: web
     name: bayport-scheduler
     env: node
     plan: free
