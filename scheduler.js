@@ -3,11 +3,32 @@
 // =======================================================
 
 require("dotenv").config(); // Load .env variables
+const express = require("express");
 const axios = require("axios");
 const dayjs = require("dayjs");
 const cron = require("node-cron");
 
-// Read API endpoints from environment variables
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+// =======================================================
+// 🌍 EXPRESS KEEP-ALIVE WEB SERVER
+// =======================================================
+app.get("/", (req, res) => {
+  res.send(`
+    <h2>✅ Bayport Scheduler is running fine!</h2>
+    <p>Environment loaded successfully at ${dayjs().format("YYYY-MM-DD HH:mm:ss")}</p>
+    <p>Last cron executed: ${global.lastCronRun || "Pending first run..."}</p>
+  `);
+});
+
+app.listen(PORT, () => {
+  console.log(`🌍 Web server running on port ${PORT}`);
+});
+
+// =======================================================
+// 🔗 ENVIRONMENT CONFIGURATION
+// =======================================================
 const PAYEE_API = process.env.PAYEE_API;
 const CALLLIST_API = process.env.CALLLIST_API;
 
@@ -17,6 +38,7 @@ console.log("🚀 Scheduler started — environment loaded successfully.");
 // 🔁 Main Function: runCheck()
 // =======================================================
 async function runCheck(label = "Daily") {
+  global.lastCronRun = `${label} check at ${dayjs().format("YYYY-MM-DD HH:mm")}`;
   console.log(`🕒 Running ${label} Bayport payment check at`, dayjs().format("YYYY-MM-DD HH:mm"));
 
   try {
@@ -33,9 +55,11 @@ async function runCheck(label = "Daily") {
       }
 
       const reminderDate = paymentDate.subtract(5, "day");
-      const reminderDay = reminderDate.format("dddd"); // Monday, Tuesday, etc.
+      const reminderDay = reminderDate.format("dddd");
 
-      console.log(`➡️ Checking ${customer.customerfullname} | Due: ${paymentDate.format("YYYY-MM-DD")} | Reminder: ${reminderDate.format("YYYY-MM-DD")} (${reminderDay})`);
+      console.log(
+        `➡️ Checking ${customer.customerfullname} | Due: ${paymentDate.format("YYYY-MM-DD")} | Reminder: ${reminderDate.format("YYYY-MM-DD")} (${reminderDay})`
+      );
 
       // Skip reminders in the past
       if (reminderDate.isBefore(today, "day")) {
@@ -47,17 +71,15 @@ async function runCheck(label = "Daily") {
       if (reminderDay === "Saturday" || reminderDay === "Sunday") {
         console.log(`⚠️ ${customer.customerfullname} reminder falls on weekend (${reminderDay})`);
 
-        // Find calllist entry using uniqueId
         const { data: callListEntry } = await axios.get(`${CALLLIST_API}?uniqueId=${customer.id}`);
 
         if (callListEntry.length > 0) {
           const entry = callListEntry[0];
 
-          // Update calllist record
           await axios.put(`${CALLLIST_API}/${entry.id}`, {
             ...entry,
             voiceCallPaused: true,
-            smsRequired: true
+            smsRequired: true,
           });
 
           console.log(`🔇 Paused voice call + marked SMS required for ${customer.customerfullname}`);
@@ -76,14 +98,14 @@ async function runCheck(label = "Daily") {
 }
 
 // =======================================================
-// 🧪 Run immediate check (for logs on Render startup)
+// 🧪 Immediate test run (for Render startup logs)
 // =======================================================
 (async () => {
   await runCheck("Immediate");
 })();
 
 // =======================================================
-// 🕛 Daily schedule (00:00 midnight)
+// 🕛 Daily schedule (runs every midnight)
 // =======================================================
 cron.schedule("0 0 * * *", async () => {
   await runCheck("Daily");
