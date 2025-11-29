@@ -1,5 +1,5 @@
 // =======================================================
-// AUTOMATED OUTBOUND CAMPAIGN DATE CHECKER (RENDER VERSION)
+// AUTOMATED OUTBOUND CAMPAIGN DATE CHECKER + TWILIO SMS
 // =======================================================
 
 require("dotenv").config();
@@ -7,8 +7,10 @@ const express = require("express");
 const axios = require("axios");
 const dayjs = require("dayjs");
 const cron = require("node-cron");
+const twilio = require("twilio");
 
 const app = express();
+app.use(express.json());
 const PORT = process.env.PORT || 10000;
 
 // =======================================================
@@ -21,9 +23,10 @@ let stats = {
   totalWeekday: 0,
   totalSkipped: 0,
   totalErrors: 0,
+  totalSMSSent: 0,
 };
 
-// --- Root route (simple view) ---
+// --- Root route ---
 app.get("/", (req, res) => {
   res.send(`
     <h2>✅ Bayport Scheduler is running fine!</h2>
@@ -44,12 +47,13 @@ app.get("/status/json", (req, res) => {
       weekday: stats.totalWeekday,
       skipped: stats.totalSkipped,
       errors: stats.totalErrors,
+      smsSent: stats.totalSMSSent,
     },
     currentTime: dayjs().format("YYYY-MM-DD HH:mm:ss"),
   });
 });
 
-// --- Manual trigger route ---
+// --- Manual trigger ---
 app.get("/trigger", async (req, res) => {
   try {
     await runCheck("Manual Trigger");
@@ -59,16 +63,15 @@ app.get("/trigger", async (req, res) => {
   }
 });
 
-// --- Start web server ---
-app.listen(PORT, () => {
-  console.log(`🌍 Web server running on port ${PORT}`);
-});
-
 // =======================================================
 // 🔗 CONFIG
 // =======================================================
 const PAYEE_API = process.env.PAYEE_API;
 const CALLLIST_API = process.env.CALLLIST_API;
+const TWILIO_SID = process.env.TWILIO_SID;
+const TWILIO_AUTH = process.env.TWILIO_AUTH;
+const TWILIO_FROM = process.env.TWILIO_FROM;
+const twilioClient = twilio(TWILIO_SID, TWILIO_AUTH);
 
 console.log("🚀 Scheduler started — environment loaded successfully.");
 
@@ -81,6 +84,7 @@ async function runCheck(label = "Daily") {
   stats.totalWeekday = 0;
   stats.totalSkipped = 0;
   stats.totalErrors = 0;
+  stats.totalSMSSent = 0;
   stats.lastRun = `${label} check at ${dayjs().format("YYYY-MM-DD HH:mm")}`;
 
   console.log(`🕒 Running ${label} Bayport payment check at`, dayjs().format("YYYY-MM-DD HH:mm"));
@@ -111,12 +115,13 @@ async function runCheck(label = "Daily") {
         continue;
       }
 
+      // =============== Weekend Logic + SMS =================
       if (reminderDay === "Saturday" || reminderDay === "Sunday") {
         stats.totalWeekend++;
         console.log(`⚠️ ${customer.customerfullname} reminder falls on weekend (${reminderDay})`);
 
+        // Pause voice call and mark for SMS
         const { data: callListEntry } = await axios.get(`${CALLLIST_API}?uniqueId=${customer.id}`);
-
         if (callListEntry.length > 0) {
           const entry = callListEntry[0];
           await axios.put(`${CALLLIST_API}/${entry.id}`, {
@@ -125,10 +130,27 @@ async function runCheck(label = "Daily") {
             smsRequired: true,
           });
           console.log(`🔇 Paused voice call + marked SMS required for ${customer.customerfullname}`);
-        } else {
-          console.log(`⚠️ No matching calllist entry found for ${customer.customerfullname}`);
         }
-      } else {
+
+        // Send SMS via Twilio
+        try {
+          const smsText = `Hello ${customer.customerfirstname}, this is a reminder from Bayport that your payment is due on ${customer.paymentduedate}. Please ensure timely payment to avoid penalties.`;
+
+          await twilioClient.messages.create({
+            body: smsText,
+            from: TWILIO_FROM,
+            to: customer.customerphone,
+          });
+
+          stats.totalSMSSent++;
+          console.log(`📨 SMS sent successfully to ${customer.customerfullname}`);
+        } catch (smsErr) {
+          stats.totalErrors++;
+          console.error(`❌ SMS sending failed for ${customer.customerfullname}:`, smsErr.message);
+        }
+      } 
+      // =====================================================
+      else {
         stats.totalWeekday++;
         console.log(`✅ ${customer.customerfullname}: Reminder on weekday (${reminderDay})`);
       }
@@ -142,11 +164,45 @@ async function runCheck(label = "Daily") {
 }
 
 // =======================================================
-// 🧪 Immediate + Scheduled
+// 📩 TWILIO SMS ENDPOINT — for Kore.ai direct use
+// =======================================================
+app.post("/send-sms", async (req, res) => {
+  try {
+    const { phone, name, message } = req.body;
+    if (!phone || !message) {
+      return res.status(400).json({ error: "Missing phone or message" });
+    }
+
+    const smsBody =
+      message || `Hello ${name || "Customer"}, this is a reminder from Bayport.`;
+
+    const smsResponse = await twilioClient.messages.create({
+      body: smsBody,
+      from: TWILIO_FROM,
+      to: phone,
+    });
+
+    console.log(`📤 SMS sent to ${phone}`);
+    res.json({ status: "success", sid: smsResponse.sid });
+  } catch (err) {
+    console.error("❌ Error sending SMS:", err.message);
+    res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// =======================================================
+// 🧪 Immediate + Scheduled Run
 // =======================================================
 (async () => {
   await runCheck("Immediate");
 })();
 cron.schedule("0 0 * * *", async () => {
   await runCheck("Daily");
+});
+
+// =======================================================
+// 🌍 Start Server
+// =======================================================
+app.listen(PORT, () => {
+  console.log(`🌍 Web server running on port ${PORT}`);
 });
