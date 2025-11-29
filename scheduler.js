@@ -71,6 +71,7 @@ const CALLLIST_API = process.env.CALLLIST_API;
 const TWILIO_SID = process.env.TWILIO_SID;
 const TWILIO_AUTH = process.env.TWILIO_AUTH;
 const TWILIO_FROM = process.env.TWILIO_FROM;
+const TEST_TOKEN = process.env.TEST_TOKEN || "bayport123"; // 🔐 optional access token
 const twilioClient = twilio(TWILIO_SID, TWILIO_AUTH);
 
 console.log("🚀 Scheduler started — environment loaded successfully.");
@@ -148,9 +149,7 @@ async function runCheck(label = "Daily") {
           stats.totalErrors++;
           console.error(`❌ SMS sending failed for ${customer.customerfullname}:`, smsErr.message);
         }
-      } 
-      // =====================================================
-      else {
+      } else {
         stats.totalWeekday++;
         console.log(`✅ ${customer.customerfullname}: Reminder on weekday (${reminderDay})`);
       }
@@ -187,6 +186,42 @@ app.post("/send-sms", async (req, res) => {
   } catch (err) {
     console.error("❌ Error sending SMS:", err.message);
     res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// =======================================================
+// 🧪 TEST-SMS ENDPOINT — Manual SMS via browser or Postman
+// =======================================================
+app.get("/test-sms", async (req, res) => {
+  try {
+    // 🔐 Optional simple protection
+    const token = req.query.token;
+    if (TEST_TOKEN && token !== TEST_TOKEN) {
+      return res.status(403).send(`<h3>🚫 Unauthorized</h3><p>Missing or invalid token.</p>`);
+    }
+
+    const to = req.query.to || "+27682330163"; // default test number
+    const name = req.query.name || "Shaun";
+    const dueDate = dayjs().add(5, "day").format("D MMMM YYYY");
+
+    const smsBody = `Hello ${name}, this is a test reminder from Bayport. Your next payment is due on ${dueDate}. (Test message sent at ${dayjs().format("HH:mm:ss")})`;
+
+    const smsResponse = await twilioClient.messages.create({
+      body: smsBody,
+      from: TWILIO_FROM,
+      to: to,
+    });
+
+    console.log(`📨 Test SMS sent to ${to}`);
+    res.send(`
+      <h3>✅ Test SMS sent successfully!</h3>
+      <p><b>To:</b> ${to}</p>
+      <p><b>Body:</b> ${smsBody}</p>
+      <p><b>Twilio SID:</b> ${smsResponse.sid}</p>
+    `);
+  } catch (err) {
+    console.error("❌ Error sending test SMS:", err.message);
+    res.status(500).send(`<h3>❌ SMS Failed:</h3><pre>${err.message}</pre>`);
   }
 });
 
