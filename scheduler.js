@@ -1,137 +1,80 @@
-// ======================================================================
-//  Bayport SA – Outbound Voice Reminder Scheduler (Voice Only)
-//  Uses MockAPI + Twilio Voice API + Kore.ai Integration
-//  Logic:
-//    • Automatic call 5 days before paymentduedate
-//    • Manual trigger when callUser changes from true → false
-//    • /trigger-now endpoint for instant demo
-//    • Demo override: allows manual triggers anytime
-// ======================================================================
+// ============================================================
+// BAYPORT SA - Outbound Voice Reminder Scheduler (Final Version)
+// ============================================================
 
 require('dotenv').config();
 const axios = require('axios');
-const dayjs = require('dayjs');
-const cron = require('node-cron');
-const twilio = require('twilio');
 const express = require('express');
+const cron = require('node-cron');
 
 const app = express();
-const client = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH);
-
-// ----------------------------------------------------------------------
-// ENVIRONMENT VARIABLES
-// ----------------------------------------------------------------------
+const PORT = process.env.PORT || 10000;
 const CALLLIST_API = process.env.CALLLIST_API;
 
-// ----------------------------------------------------------------------
-// HELPER FUNCTIONS
-// ----------------------------------------------------------------------
+console.log("🚀 Bayport Voice Scheduler starting...");
 
-// Check if today is 5 days before the due date
-function isFiveDaysBefore(paymentDate) {
-  const today = dayjs().startOf('day');
-  const target = dayjs(paymentDate).subtract(5, 'day').startOf('day');
-  return today.isSame(target);
-}
-
-// Trigger Twilio voice call
-async function makeVoiceCall(user, triggerType = "auto") {
-  try {
-    console.log(`📞 Initiating ${triggerType} voice call for ${user.firstName} (${user.phoneNumber})`);
-
-    const call = await client.calls.create({
-      to: user.phoneNumber,
-      from: process.env.TWILIO_FROM,
-      url: process.env.TWILIO_VOICE_URL // TwiML Bin or Kore.ai webhook URL
-    });
-
-    console.log(`✅ Twilio call started (SID: ${call.sid})`);
-
-    // Update record in MockAPI
-    await axios.put(`${CALLLIST_API}/${user.id}`, { callUser: true });
-    console.log(`✅ Updated ${user.firstName}'s record → callUser: true`);
-  } catch (err) {
-    console.error(`❌ Voice call error for ${user.firstName}:`, err.message);
-  }
-}
-
-// ----------------------------------------------------------------------
-// 1️⃣ DAILY SCHEDULER — automatic 5-days-before payment due
-// ----------------------------------------------------------------------
-async function runScheduler() {
-  console.log('🔁 Running daily 5-day-before voice reminder check...');
+// ============================================================
+// 📅 Function: Check MockAPI and update callUser flag
+// ============================================================
+async function checkAndUpdateCallList() {
+  console.log(`🕒 Running 5-day-before reminder check at ${new Date().toLocaleString()}`);
+  console.log(`🔎 Polling from: ${CALLLIST_API}`);
 
   try {
-    const { data: customers } = await axios.get(
-      `${CALLLIST_API}?wrongNumber=false&callUser=false`
-    );
+    // 1️⃣ Get all contacts
+    const { data: customers } = await axios.get(CALLLIST_API);
 
-    if (!customers || customers.length === 0) {
-      console.log('ℹ️ No eligible customers found today.');
-      return;
-    }
+    // 2️⃣ Filter valid contacts
+    const valid = customers.filter(c => c.wrongNumber === false);
 
-    for (const user of customers) {
-      if (isFiveDaysBefore(user.paymentduedate)) {
-        await makeVoiceCall(user, "scheduled");
+    // 3️⃣ Loop and update those 5 days before due date
+    for (const cust of valid) {
+      const { id, firstName, lastName, paymentduedate, callUser } = cust;
+      if (!paymentduedate) continue;
+
+      const due = new Date(paymentduedate);
+      const now = new Date();
+      const diffDays = Math.ceil((due - now) / (1000 * 60 * 60 * 24));
+
+      if (diffDays === 5 && callUser === true) {
+        console.log(`📞 Eligible: ${firstName} ${lastName} (${diffDays} days before due)`);
+
+        await axios.put(`${CALLLIST_API}/${id}`, {
+          ...cust,
+          callUser: false, // Kore.ai will detect this
+        });
+
+        console.log(`✅ Updated callUser=false for ${firstName} ${lastName}`);
       } else {
-        console.log(`⏳ ${user.firstName} is not yet within 5-day window.`);
+        console.log(`⏩ Skipping ${firstName} ${lastName} — due in ${diffDays} days`);
       }
     }
-
-    console.log('✅ Daily scheduler completed.');
   } catch (err) {
-    console.error('❌ Scheduler error:', err.message);
+    console.error(`❌ Polling error: ${err.message}`);
   }
 }
 
-// Schedule every day at 08:00 AM South Africa time
-cron.schedule('0 8 * * *', runScheduler);
-
-// ----------------------------------------------------------------------
-// 2️⃣ POLLING LOOP — manual/demo trigger when callUser flips true→false
-// ----------------------------------------------------------------------
-let lastSnapshot = [];
-
-async function pollForManualTriggers() {
-  try {
-    const { data: current } = await axios.get(
-      `${CALLLIST_API}?wrongNumber=false&callUser=false`
-    );
-
-    // Detect new manual triggers (callUser reset to false)
-    const newTriggers = current.filter(
-      u => !lastSnapshot.find(prev => prev.id === u.id)
-    );
-
-    for (const user of newTriggers) {
-      console.log(`🚨 Manual trigger detected for ${user.firstName}`);
-
-      // DEMO OVERRIDE: Always trigger even if not 5 days before
-      await makeVoiceCall(user, "manual-demo");
-    }
-
-    lastSnapshot = current;
-  } catch (err) {
-    console.error('⚠️ Polling error:', err.message);
-  }
-}
-
-// Poll MockAPI every 60 seconds
-setInterval(pollForManualTriggers, 60 * 1000);
-
-// ----------------------------------------------------------------------
-// 3️⃣ MANUAL ROUTE — instant run for demos or testing
-// ----------------------------------------------------------------------
-app.get('/trigger-now', async (req, res) => {
-  console.log('⚡ Manual trigger-now route activated');
-  await runScheduler();
-  res.json({ status: 'manual 5-day scheduler triggered' });
+// ============================================================
+// 🧪 Manual Test Route
+// ============================================================
+app.get("/trigger-now", async (req, res) => {
+  console.log("🧪 Manual trigger route activated");
+  await checkAndUpdateCallList();
+  res.json({ status: "Manual scheduler triggered" });
 });
 
-// ----------------------------------------------------------------------
-// EXPRESS SERVER (Render deployment)
-// ----------------------------------------------------------------------
-app.listen(process.env.PORT || 10000, () => {
-  console.log(`🚀 Voice Scheduler running on port ${process.env.PORT || 10000}`);
+// ============================================================
+// 🕒 Daily Scheduler - Runs 08:00 AM
+// ============================================================
+cron.schedule("0 8 * * *", () => {
+  console.log("🚨 Daily voice reminder scheduler running...");
+  checkAndUpdateCallList();
+});
+
+// ============================================================
+// 🌍 Server Start
+// ============================================================
+app.listen(PORT, () => {
+  console.log(`✅ Voice Scheduler running on port ${PORT}`);
+  console.log(`🌐 Available at: https://bayport-scheduler.onrender.com`);
 });
