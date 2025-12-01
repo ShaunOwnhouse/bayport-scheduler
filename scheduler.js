@@ -1,121 +1,156 @@
-// ===============================================
-// Bayport Voice Scheduler – Final Version
-// Logic: Update callUser flag based on payment due date
-// ===============================================
+// scheduler.js
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const axios = require("axios");
+const bodyParser = require("body-parser");
+const cron = require("node-cron");
 
-require('dotenv').config();
-const express = require('express');
-const axios = require('axios');
-const cors = require('cors');
-const bodyParser = require('body-parser');
-
-// =====================================================
-// CONFIGURATION
-// =====================================================
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 10000;
-const API_URL = "https://6925457482b59600d722efdb.mockapi.io/Calllist";
+const CALLLIST_API = process.env.CALLLIST_API;
 
-// =====================================================
-// HELPER FUNCTION
-// =====================================================
-async function checkAndUpdateCallList() {
-  console.log("🕓 Running 5-day-before reminder check at", new Date().toLocaleString());
+// ---------- helpers ----------
+function parsePaymentDate(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  return d;
+}
+
+function daysBetween(start, end) {
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const diff = end.setHours(0, 0, 0, 0) - start.setHours(0, 0, 0, 0);
+  return Math.round(diff / msPerDay);
+}
+
+// ---------- core scheduler ----------
+async function runFiveDayScheduler(triggerSource = "auto/cron") {
+  const now = new Date();
+  console.log(
+    `\n📅 Running 5-day-before reminder check at ${now.toLocaleString()} (source: ${triggerSource})`
+  );
 
   try {
-    const response = await axios.get(API_URL);
-    const users = response.data;
-    const now = new Date();
+    console.log(`🌐 Polling from: ${CALLLIST_API}`);
+    const resp = await axios.get(CALLLIST_API);
+    const customers = resp.data;
 
-    if (!Array.isArray(users) || users.length === 0) {
-      console.log("⚠️ No users found in MockAPI Calllist.");
+    if (!Array.isArray(customers) || customers.length === 0) {
+      console.log("ℹ️ No customers in Calllist.");
       return;
     }
 
-    for (const user of users) {
-      try {
-        const paymentDate = new Date(user.paymentduedate);
-        const diffDays = Math.ceil((paymentDate - now) / (1000 * 60 * 60 * 24));
+    for (const customer of customers) {
+      const id = customer.id;
+      const name =
+        `${customer.firstName || ""} ${customer.lastName || ""}`.trim() ||
+        `ID ${id}`;
+      const dueStr = customer.paymentduedate;
+      const wrongNumber = customer.wrongNumber;
+      let callUser = Number(customer.callUser);
 
-        // ✅ CASE 1: Payment due in 5 days or less
-        if (
-          diffDays <= 5 &&
-          diffDays >= 0 &&
-          (user.callUser === 1 || user.callUser === "1") &&
-          user.wrongNumber === false
-        ) {
-          console.log(`📞 [TRIGGER] ${user.firstName} ${user.lastName} — due in ${diffDays} day(s).`);
+      const dueDate = parsePaymentDate(dueStr);
+      if (!dueDate) {
+        console.log(
+          `⏭️ Skipping ${name} — missing or invalid paymentduedate (${dueStr})`
+        );
+        continue;
+      }
 
-          await axios.put(`${API_URL}/${user.id}`, {
-            ...user,
-            callUser: 0,
-          });
+      const today = new Date();
+      const daysUntil = daysBetween(today, new Date(dueDate));
 
-          console.log(`✅ Updated ${user.firstName}: callUser → 0`);
-        }
+      if (isNaN(daysUntil)) {
+        console.log(
+          `⏭️ Skipping ${name} — could not compute daysUntil (value: ${daysUntil})`
+        );
+        continue;
+      }
 
-        // ✅ CASE 2: Payment date has passed → reset callUser
-        else if (
-          diffDays < 0 &&
-          (user.callUser === 0 || user.callUser === "0")
-        ) {
-          console.log(`🔁 [RESET] ${user.firstName} — payment passed (${user.paymentduedate}).`);
+      // Always respect wrongNumber flag
+      if (wrongNumber === true || wrongNumber === "true") {
+        console.log(`🚫 Skipping ${name} — marked as wrong number`);
+        continue;
+      }
 
-          await axios.put(`${API_URL}/${user.id}`, {
-            ...user,
+      // 🔁 RESET LOGIC:
+      // If the due date has passed AND callUser is 0,
+      // flip it back to 1 so the record is "clean"/re-usable.
+      if (daysUntil < 0 && callUser === 0) {
+        try {
+          await axios.put(`${CALLLIST_API}/${id}`, {
+            ...customer,
             callUser: 1,
           });
-
-          console.log(`✅ Reset ${user.firstName}: callUser → 1`);
+          console.log(
+            `🔁 Reset ${name}: callUser 0 → 1 (payment date passed, daysUntil=${daysUntil})`
+          );
+        } catch (err) {
+          console.error(
+            `❌ Error resetting callUser for ${name} (ID ${id}):`,
+            err.response?.data || err.message
+          );
         }
+        continue;
+      }
 
-        // ⏭ CASE 3: Skip anything else
-        else {
-          console.log(`⏭ Skipping ${user.firstName} — due in ${diffDays} days or invalid record.`);
+      // 📞 TRIGGER LOGIC:
+      // If due in 0–5 days AND callUser is NOT 0 → set to 0 (tell Kore to call)
+      if (daysUntil >= 0 && daysUntil <= 5 && callUser !== 0) {
+        console.log(`📞 [TRIGGER] ${name} — due in ${daysUntil} day(s).`);
+
+        try {
+          await axios.put(`${CALLLIST_API}/${id}`, {
+            ...customer,
+            callUser: 0,
+          });
+          console.log(`✅ Updated ${name}: callUser → 0`);
+        } catch (err) {
+          console.error(
+            `❌ Error updating callUser for ${name} (ID ${id}):`,
+            err.response?.data || err.message
+          );
         }
-      } catch (innerErr) {
-        console.error(`❌ Error processing user ${user.id}:`, innerErr.message);
+      } else {
+        console.log(
+          `⏭️ Skipping ${name} — due in ${daysUntil} days or already processed (callUser=${callUser})`
+        );
       }
     }
 
-  } catch (error) {
-    console.error("❌ Error fetching data from MockAPI:", error.message);
+    console.log("✅ 5-day-before reminder check completed.\n");
+  } catch (err) {
+    console.error("❌ Scheduler error:", err.response?.data || err.message);
   }
 }
 
-// =====================================================
-// SCHEDULER ROUTES
-// =====================================================
+// ---------- HTTP endpoints ----------
 
-// Manual trigger route (for testing)
-app.get('/trigger-now', async (req, res) => {
+// Simple healthcheck
+app.get("/", (req, res) => {
+  res.json({ status: "ok", message: "Bayport Voice Scheduler running" });
+});
+
+// Manual trigger for testing / demos
+app.get("/trigger-now", async (req, res) => {
   console.log("🚀 Manual trigger route activated");
-  await checkAndUpdateCallList();
+  runFiveDayScheduler("manual");
   res.json({ status: "Manual scheduler triggered" });
 });
 
-// Root endpoint
-app.get('/', (req, res) => {
-  res.send("✅ Bayport Scheduler is running.");
+// ---------- CRON: 8am Monday–Friday ----------
+// NOTE: This is 06:00 UTC ≈ 08:00 South Africa time (GMT+2).
+// If Render ever runs in a different timezone, adjust the hour here.
+cron.schedule("0 6 * * 1-5", () => {
+  console.log("⏰ Cron fired: Weekday 8am (local) 5-day scheduler");
+  runFiveDayScheduler("cron 8am weekday");
 });
 
-// =====================================================
-// SERVER INITIALIZATION
-// =====================================================
+// ---------- start server ----------
 app.listen(PORT, () => {
-  console.log("🚀 Bayport Voice Scheduler starting...");
-  console.log(`✅ Voice Scheduler running on port ${PORT}`);
-  console.log(`🌐 Available at: https://bayport-scheduler.onrender.com`);
-  console.log("//////////////////////////////////////////////////////////");
-  console.log("==> Your service is live 🎉");
-  console.log("//////////////////////////////////////////////////////////");
-
-  // Run every 6 hours
-  setInterval(checkAndUpdateCallList, 6 * 60 * 60 * 1000);
-
-  // Run immediately on startup
-  checkAndUpdateCallList();
+  console.log(`🚀 Voice Scheduler running on port ${PORT}`);
 });
