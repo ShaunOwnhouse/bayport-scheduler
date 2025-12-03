@@ -1,16 +1,18 @@
 // ================================================
-// Bayport Callback Scheduler WITH HTTP TRIGGER
-// - Runs every 5 minutes automatically
-// - Also exposes /run-callback-check for manual tests
+// Bayport Callback Scheduler WITH HTTP TRIGGER (FINAL VERSION)
+// - Runs every 1 minute automatically
+// - Fires ONLY at the exact callback time (HH:MM)
+// - Keeps instance alive via UptimeRobot pings
 // ================================================
 
 import fetch from "node-fetch";
 import http from "http";
 
 const BASE_URL = "https://6925457482b59600d722efdb.mockapi.io/Calllist";
-const CHECK_INTERVAL_MINUTES = 5;
+const CHECK_INTERVAL_MINUTES = 1; // Check every 1 minute for near-real-time precision
 const TZ_OFFSET_HOURS = 2; // Johannesburg (+2)
 
+// ==================== CORE FUNCTION ====================
 async function resetDueCallbacks() {
   console.log("🕓 [Scheduler] Checking for due callbacks...");
 
@@ -29,6 +31,7 @@ async function resetDueCallbacks() {
       if (callUser === 1 && callBackTime) {
         const normalizedTime = callBackTime.trim().substring(0, 5); // "HH:MM"
 
+        // ✅ Trigger only when times match exactly
         if (normalizedTime === currentTime) {
           console.log(
             `✅ [Scheduler] Resetting callUser for ${firstName || "ID"} ${id} (callback time: ${callBackTime})`
@@ -53,12 +56,13 @@ async function resetDueCallbacks() {
   }
 }
 
+// ==================== INTERVAL & STARTUP ====================
+resetDueCallbacks(); // run immediately on startup
+setInterval(resetDueCallbacks, CHECK_INTERVAL_MINUTES * 60 * 1000); // repeat every 1 min
 
-// run automatically every 5 minutes
-resetDueCallbacks();
-setInterval(resetDueCallbacks, CHECK_INTERVAL_MINUTES * 60 * 1000);
+console.log("🚀 [Scheduler] Bayport callback service started (checks every 1 minute)");
 
-// ---------- HTTP SERVER FOR MANUAL TRIGGER ----------
+// ==================== HTTP SERVER FOR MANUAL TRIGGER ====================
 const PORT = process.env.PORT || 10000;
 
 const server = http.createServer(async (req, res) => {
@@ -69,7 +73,7 @@ const server = http.createServer(async (req, res) => {
     res.end("Callback check executed.\n");
   } else {
     res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("Bayport scheduler is running.\n");
+    res.end("Bayport scheduler is running and checking every 1 minute.\n");
   }
 });
 
