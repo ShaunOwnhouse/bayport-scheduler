@@ -1,6 +1,3 @@
-# =========================================================
-# Render Deployment Blueprint — Web Service Version
-# =========================================================
 services:
   - type: web
     name: bayport-scheduler
@@ -9,7 +6,5 @@ services:
     buildCommand: npm install
     startCommand: node scheduler.js
     envVars:
-      - key: PAYEE_API
-        sync: false
-      - key: CALLLIST_API
-        sync: false
+      - key: NODE_ENV
+        value: production
