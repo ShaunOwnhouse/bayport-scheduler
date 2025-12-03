@@ -29,7 +29,7 @@ async function resetDueCallbacks() {
       if (callUser === 1 && callBackTime) {
         const normalizedTime = callBackTime.trim().substring(0, 5); // "HH:MM"
 
-        if (normalizedTime <= currentTime) {
+        if (normalizedTime === currentTime) {
           console.log(
             `✅ [Scheduler] Resetting callUser for ${firstName || "ID"} ${id} (callback time: ${callBackTime})`
           );
@@ -52,6 +52,7 @@ async function resetDueCallbacks() {
     console.error("❌ [Scheduler] Error:", error);
   }
 }
+
 
 // run automatically every 5 minutes
 resetDueCallbacks();
