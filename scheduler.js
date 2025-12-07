@@ -1,8 +1,8 @@
 // ================================================
-// Bayport Callback Scheduler WITH HTTP TRIGGER (FINAL BULLETPROOF VERSION)
+// Bayport Callback Scheduler WITH HTTP TRIGGER (UPDATED FOR isCallback TOGGLE)
 // - Runs every 1 minute automatically
 // - Fires 30 seconds BEFORE or up to 60 seconds AFTER callback time
-// - Keeps instance alive via UptimeRobot pings
+// - Updates ONLY "isCallback" from "true" to "false" (no callUser change)
 // ================================================
 import fetch from "node-fetch";
 import http from "http";
@@ -27,46 +27,47 @@ async function resetDueCallbacks() {
       localNow.getMinutes() * 60 +
       localNow.getSeconds();
     const currentTime = localNow.toTimeString().slice(0, 8); // "HH:MM:SS"
-    
+
     for (const record of data) {
-      const { id, firstName, callUser, callBackTime, isCallback } = record;
-      
-      console.log(`Processing record: ID ${id}, isCallback: ${isCallback}, callUser: ${callUser}, callBackTime: ${callBackTime}`);
-      
-      if (callUser === 1 && callBackTime && isCallback === "true") {
+      const { id, firstName, callBackTime, isCallback } = record;
+
+      console.log(
+        `Processing record: ID ${id}, isCallback: ${isCallback}, callBackTime: ${callBackTime}`
+      );
+
+      // ✅ Only process if it's flagged for callback and has a time
+      if (isCallback === "true" && callBackTime) {
         const [cbHour, cbMinute] = callBackTime
           .trim()
           .substring(0, 5)
           .split(":")
           .map((n) => parseInt(n, 10));
-        
+
         const callbackSeconds = cbHour * 3600 + cbMinute * 60;
         const diff = callbackSeconds - nowSeconds;
-        
+
         console.log(`Callback time diff: ${diff} seconds`);
-        
+
         // ✅ Trigger if within 30s BEFORE or 60s AFTER callback time
         if (diff <= EARLY_TRIGGER_SECONDS && diff >= -LATE_GRACE_SECONDS) {
           console.log(
-            `✅ [Scheduler] Updating isCallback for ${
-              firstName || "ID"
-            } ${id} (callback time: ${callBackTime}, trigger diff: ${diff}s)`
+            `✅ [Scheduler] Callback due for ${firstName || "Record"} ${id} (time: ${callBackTime}, diff: ${diff}s)`
           );
-          
+
           try {
             const putRes = await fetch(`${BASE_URL}/${id}`, {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ 
-                isCallback: "false" 
+              body: JSON.stringify({
+                isCallback: "false", // 🔄 only update this field
               }),
             });
-            
+
             if (!putRes.ok) {
               const errorBody = await putRes.text();
               console.error(`❌ Failed to update ID ${id}: ${putRes.status}`, errorBody);
             } else {
-              console.log(`✅ Successfully updated record ${id}`);
+              console.log(`✅ Successfully updated isCallback=false for record ${id}`);
             }
           } catch (putError) {
             console.error(`❌ Error updating record ${id}:`, putError);
@@ -74,7 +75,7 @@ async function resetDueCallbacks() {
         }
       }
     }
-    
+
     console.log(`✅ [Scheduler] Completed check at ${currentTime}`);
   } catch (error) {
     console.error("❌ [Scheduler] Error:", error);
