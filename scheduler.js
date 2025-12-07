@@ -31,6 +31,8 @@ async function resetDueCallbacks() {
     for (const record of data) {
       const { id, firstName, callUser, callBackTime, isCallback } = record;
       
+      console.log(`Processing record: ID ${id}, isCallback: ${isCallback}, callUser: ${callUser}, callBackTime: ${callBackTime}`);
+      
       if (callUser === 1 && callBackTime && isCallback === "true") {
         const [cbHour, cbMinute] = callBackTime
           .trim()
@@ -41,6 +43,8 @@ async function resetDueCallbacks() {
         const callbackSeconds = cbHour * 3600 + cbMinute * 60;
         const diff = callbackSeconds - nowSeconds;
         
+        console.log(`Callback time diff: ${diff} seconds`);
+        
         // ✅ Trigger if within 30s BEFORE or 60s AFTER callback time
         if (diff <= EARLY_TRIGGER_SECONDS && diff >= -LATE_GRACE_SECONDS) {
           console.log(
@@ -49,16 +53,23 @@ async function resetDueCallbacks() {
             } ${id} (callback time: ${callBackTime}, trigger diff: ${diff}s)`
           );
           
-          const putRes = await fetch(`${BASE_URL}/${id}`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ 
-              isCallback: "false" 
-            }),
-          });
-          
-          if (!putRes.ok) {
-            console.error(`❌ Failed to update ID ${id}: ${putRes.status}`);
+          try {
+            const putRes = await fetch(`${BASE_URL}/${id}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ 
+                isCallback: "false" 
+              }),
+            });
+            
+            if (!putRes.ok) {
+              const errorBody = await putRes.text();
+              console.error(`❌ Failed to update ID ${id}: ${putRes.status}`, errorBody);
+            } else {
+              console.log(`✅ Successfully updated record ${id}`);
+            }
+          } catch (putError) {
+            console.error(`❌ Error updating record ${id}:`, putError);
           }
         }
       }
